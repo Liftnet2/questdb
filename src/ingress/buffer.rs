@@ -874,6 +874,49 @@ impl Buffer {
         Ok(self)
     }
 
+    /// Record an integer value for the given column.
+    ///
+    /// ```no_run
+    /// # use questdb::Result;
+    /// # use questdb::ingress::{Buffer, SenderBuilder};
+    /// # fn main() -> Result<()> {
+    /// # let mut sender = SenderBuilder::from_conf("https::addr=localhost:9000;")?.build()?;
+    /// # let mut buffer = sender.new_buffer();
+    /// # buffer.table("x")?;
+    /// buffer.column_i16("col_name", 42)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// or
+    ///
+    /// ```no_run
+    /// # use questdb::Result;
+    /// # use questdb::ingress::{Buffer, SenderBuilder};
+    /// use questdb::ingress::ColumnName;
+    ///
+    /// # fn main() -> Result<()> {
+    /// # let mut sender = SenderBuilder::from_conf("https::addr=localhost:9000;")?.build()?;
+    /// # let mut buffer = sender.new_buffer();
+    /// # buffer.table("x")?;
+    /// let col_name = ColumnName::new("col_name")?;
+    /// buffer.column_i16(col_name, 42)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn column_i16<'a, N>(&mut self, name: N, value: i16) -> crate::Result<&mut Self>
+    where
+        N: TryInto<ColumnName<'a>>,
+        Error: From<N::Error>,
+    {
+        self.write_column_key(name)?;
+        let mut buf = itoa::Buffer::new();
+        let printed = buf.format(value);
+        self.output.extend_from_slice(printed.as_bytes());
+        self.output.push(b'i');
+        Ok(self)
+    }
+
     /// Record a floating point value for the given column.
     ///
     /// ```no_run
