@@ -163,6 +163,7 @@ pub(crate) fn connect_tcp(
     net_interface: Option<&str>,
     auth_timeout: Duration,
     tls_settings: Option<TlsSettings>,
+    client_auth: Option<crate::ingress::tls::ClientAuth>,
     auth: &Option<conf::AuthParams>,
 ) -> crate::Result<SyncProtocolHandler> {
     let addr: SockAddr = gai::resolve_host_port(host, port)?;
@@ -206,7 +207,7 @@ pub(crate) fn connect_tcp(
 
     let mut conn = match tls_settings {
         Some(tls_settings) => {
-            let tls_config = configure_tls(tls_settings)?;
+            let tls_config = configure_tls(tls_settings, client_auth)?;
             let server_name: ServerName = ServerName::try_from(host)
                 .map_err(|inv_dns_err| error::fmt!(TlsError, "Bad host: {}", inv_dns_err))?
                 .to_owned();

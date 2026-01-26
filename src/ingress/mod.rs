@@ -371,6 +371,12 @@ pub struct SenderBuilder {
     tls_ca: ConfigSetting<CertificateAuthority>,
     tls_roots: ConfigSetting<Option<PathBuf>>,
 
+    /// Path to client certificate file for mTLS
+    tls_client_cert: ConfigSetting<Option<PathBuf>>,
+
+    /// Path to client private key file for mTLS
+    tls_client_key: ConfigSetting<Option<PathBuf>>,
+
     #[cfg(feature = "_sender-http")]
     http: Option<conf::HttpConfig>,
 }
@@ -554,6 +560,30 @@ impl SenderBuilder {
                     ));
                 }
 
+                "tls_client_cert" => {
+                    let path = PathBuf::from_str(val).map_err(|e| {
+                        error::fmt!(
+                            ConfigError,
+                            "Invalid path {:?} for \"tls_client_cert\": {}",
+                            val,
+                            e
+                        )
+                    })?;
+                    builder.tls_client_cert(path)?
+                }
+
+                "tls_client_key" => {
+                    let path = PathBuf::from_str(val).map_err(|e| {
+                        error::fmt!(
+                            ConfigError,
+                            "Invalid path {:?} for \"tls_client_key\": {}",
+                            val,
+                            e
+                        )
+                    })?;
+                    builder.tls_client_key(path)?
+                }
+
                 #[cfg(feature = "sync-sender-http")]
                 "request_min_throughput" => {
                     builder.request_min_throughput(parse_conf_value(key, val)?)?
@@ -649,6 +679,8 @@ impl SenderBuilder {
 
             tls_ca: ConfigSetting::new_default(tls_ca),
             tls_roots: ConfigSetting::new_default(None),
+            tls_client_cert: ConfigSetting::new_default(None),
+            tls_client_key: ConfigSetting::new_default(None),
 
             #[cfg(feature = "sync-sender-http")]
             http: if protocol.is_httpx() {
@@ -830,6 +862,46 @@ impl SenderBuilder {
         })?;
         builder.tls_roots.set_specified("tls_roots", Some(path))?;
         Ok(builder)
+    }
+
+    /// Set the path to the client certificate file for mTLS authentication.
+    ///
+    /// This is used when the server requires client certificate verification.
+    /// Must be used together with [`tls_client_key`](SenderBuilder::tls_client_key).
+    pub fn tls_client_cert<P: Into<PathBuf>>(mut self, path: P) -> Result<Self> {
+        let path = path.into();
+        // Attempt to read the file here to catch any issues early.
+        let _file = std::fs::File::open(&path).map_err(|io_err| {
+            error::fmt!(
+                ConfigError,
+                "Could not open client certificate file from path {:?}: {}",
+                path,
+                io_err
+            )
+        })?;
+        self.tls_client_cert
+            .set_specified("tls_client_cert", Some(path))?;
+        Ok(self)
+    }
+
+    /// Set the path to the client private key file for mTLS authentication.
+    ///
+    /// This is used when the server requires client certificate verification.
+    /// Must be used together with [`tls_client_cert`](SenderBuilder::tls_client_cert).
+    pub fn tls_client_key<P: Into<PathBuf>>(mut self, path: P) -> Result<Self> {
+        let path = path.into();
+        // Attempt to read the file here to catch any issues early.
+        let _file = std::fs::File::open(&path).map_err(|io_err| {
+            error::fmt!(
+                ConfigError,
+                "Could not open client private key file from path {:?}: {}",
+                path,
+                io_err
+            )
+        })?;
+        self.tls_client_key
+            .set_specified("tls_client_key", Some(path))?;
+        Ok(self)
     }
 
     /// The maximum buffer size in bytes that the client will flush to the server.
@@ -1068,6 +1140,29 @@ impl SenderBuilder {
             self.tls_roots.deref().as_deref(),
         )?;
 
+        // Build client auth for mTLS if both cert and key are provided
+        let client_auth = match (
+            self.tls_client_cert.deref().as_ref(),
+            self.tls_client_key.deref().as_ref(),
+        ) {
+            (Some(cert_path), Some(key_path)) => {
+                Some(tls::ClientAuth::from_pem_files(cert_path, key_path)?)
+            }
+            (Some(_), None) => {
+                return Err(error::fmt!(
+                    ConfigError,
+                    "tls_client_cert requires tls_client_key to also be set"
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(error::fmt!(
+                    ConfigError,
+                    "tls_client_key requires tls_client_cert to also be set"
+                ));
+            }
+            (None, None) => None,
+        };
+
         let auth = self.build_auth()?;
 
         let handler = match self.protocol {
@@ -1078,6 +1173,7 @@ impl SenderBuilder {
                 self.net_interface.deref().as_deref(),
                 *self.auth_timeout,
                 tls_settings,
+                client_auth,
                 &auth,
             )?,
             #[cfg(feature = "sync-sender-http")]
@@ -1101,7 +1197,9 @@ impl SenderBuilder {
                     .no_delay(true);
 
                 let tls_config = match tls_settings {
-                    Some(tls_settings) => Some(tls::configure_tls(tls_settings)?),
+                    Some(tls_settings) => {
+                        Some(tls::configure_tls(tls_settings, client_auth.clone())?)
+                    }
                     None => None,
                 };
 
