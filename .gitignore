@@ -1,0 +1,10 @@
+target/
+*.json
+*.idl
+logs/
+Cargo.lock
+.idea/
+.vscode/
+certs/
+*.env
+*.yaml
