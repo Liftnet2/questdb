@@ -21,7 +21,7 @@
  *  limitations under the License.
  *
  ******************************************************************************/
-#![doc = include_str!("../README.md")]
+#![doc = include_str!("README.md")]
 
 mod error;
 
