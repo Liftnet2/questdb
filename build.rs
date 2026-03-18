@@ -296,7 +296,7 @@ pub mod json_tests {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
     #[cfg(not(any(feature = "tls-webpki-certs", feature = "tls-native-certs")))]
     compile_error!(
         "At least one of `tls-webpki-certs` or `tls-native-certs` features must be enabled."
@@ -323,8 +323,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("cargo:rerun-if-changed=Cargo.lock");
         println!("cargo:rerun-if-changed=src/test/interop/ilp-client-interop-test.json");
 
-        json_tests::build()?;
+        json_tests::build().expect("failed to generate json tests");
     }
-
-    Ok(())
 }
