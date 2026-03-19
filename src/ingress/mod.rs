@@ -1197,9 +1197,7 @@ impl SenderBuilder {
                     .no_delay(true);
 
                 let tls_config = match tls_settings {
-                    Some(tls_settings) => {
-                        Some(tls::configure_tls(tls_settings, client_auth.clone())?)
-                    }
+                    Some(tls_settings) => Some(tls::configure_tls(tls_settings, client_auth)?),
                     None => None,
                 };
 
@@ -1362,8 +1360,8 @@ fn parse_public_key(pub_key_x: &str, pub_key_y: &str) -> Result<Vec<u8>> {
     // SEC 1 Uncompressed Octet-String-to-Elliptic-Curve-Point Encoding
     let mut encoded = Vec::new();
     encoded.push(4u8); // 0x04 magic byte that identifies this as uncompressed.
-    let pub_key_x_ken = pub_key_x.len();
-    if pub_key_x_ken > 32 {
+    let pub_key_x_len = pub_key_x.len();
+    if pub_key_x_len > 32 {
         return Err(fmt!(
             AuthError,
             "Misconfigured ILP authentication keys. Public key x is too long. \
@@ -1378,7 +1376,7 @@ fn parse_public_key(pub_key_x: &str, pub_key_y: &str) -> Result<Vec<u8>> {
             Hint: Check the keys for a possible typo."
         ));
     }
-    encoded.resize((32 - pub_key_x_ken) + 1, 0u8);
+    encoded.resize((32 - pub_key_x_len) + 1, 0u8);
     encoded.append(&mut pub_key_x);
     encoded.resize((32 - pub_key_y_len) + 1 + 32, 0u8);
     encoded.append(&mut pub_key_y);

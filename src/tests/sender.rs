@@ -874,3 +874,174 @@ pub(crate) fn f64_to_bytes(name: &str, value: f64, version: ProtocolVersion) -> 
     }
     buf
 }
+
+// ─── mTLS Tests ──────────────────────────────────────────────────────────────
+
+#[cfg(feature = "sync-sender-tcp")]
+#[test]
+fn test_mtls_tcp_valid_client_cert() -> TestResult {
+    let mut ca_path = certs_dir();
+    ca_path.push("server_rootCA.pem");
+    let mut client_cert_path = certs_dir();
+    client_cert_path.push("client.crt");
+    let mut client_key_path = certs_dir();
+    client_key_path.push("client.key");
+
+    let server = MockServer::new()?;
+    let lsb = server
+        .lsb_tcps()
+        .protocol_version(ProtocolVersion::V1)?
+        .tls_roots(ca_path)?
+        .tls_client_cert(client_cert_path)?
+        .tls_client_key(client_key_path)?;
+    let server_jh = server.accept_mtls();
+    let mut sender = lsb.build()?;
+    let mut server: MockServer = server_jh.join().unwrap()?;
+
+    let mut buffer = sender.new_buffer();
+    buffer
+        .table("test")?
+        .symbol("t1", "v1")?
+        .column_f64("f1", 0.5)?
+        .at(TimestampNanos::new(10000000))?;
+
+    sender.flush(&mut buffer)?;
+    assert_eq!(server.recv_q()?, 1);
+    Ok(())
+}
+
+#[cfg(feature = "sync-sender-tcp")]
+#[test]
+fn test_mtls_tcp_verified_by_server() -> TestResult {
+    // The client presents a cert signed by client_rootCA, and the server
+    // trusts client_rootCA. This verifies the full mTLS path through
+    // the library: cert loading, TLS config, and handshake completion.
+    let mut ca_path = certs_dir();
+    ca_path.push("server_rootCA.pem");
+    let mut client_cert_path = certs_dir();
+    client_cert_path.push("client.crt");
+    let mut client_key_path = certs_dir();
+    client_key_path.push("client.key");
+
+    let server = MockServer::new()?;
+    let lsb = server
+        .lsb_tcps()
+        .protocol_version(ProtocolVersion::V1)?
+        .auth_timeout(Duration::from_millis(2000))?
+        .tls_roots(ca_path)?
+        .tls_client_cert(client_cert_path)?
+        .tls_client_key(client_key_path)?;
+
+    // Server uses mTLS — the client cert IS presented but validated by
+    // a server that trusts client_rootCA.pem. This verifies the full
+    // mTLS path through the library is functional.
+    let server_jh = server.accept_mtls();
+    let mut sender = lsb.build()?;
+    let mut server: MockServer = server_jh.join().unwrap()?;
+
+    let mut buffer = sender.new_buffer();
+    buffer
+        .table("test")?
+        .symbol("t1", "v1")?
+        .column_f64("f1", 0.5)?
+        .at(TimestampNanos::new(10000000))?;
+
+    sender.flush(&mut buffer)?;
+    assert_eq!(server.recv_q()?, 1);
+    Ok(())
+}
+
+#[cfg(feature = "sync-sender-tcp")]
+#[test]
+fn test_tls_client_cert_without_key_build_errors() -> TestResult {
+    let mut ca_path = certs_dir();
+    ca_path.push("server_rootCA.pem");
+    let mut client_cert_path = certs_dir();
+    client_cert_path.push("client.crt");
+
+    let server = MockServer::new()?;
+    let lsb = server
+        .lsb_tcps()
+        .tls_roots(ca_path)?
+        .tls_client_cert(client_cert_path)?;
+    let result = lsb.build();
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigError);
+    assert!(
+        err.msg()
+            .contains("tls_client_cert requires tls_client_key")
+    );
+    Ok(())
+}
+
+#[cfg(feature = "sync-sender-tcp")]
+#[test]
+fn test_tls_client_key_without_cert_build_errors() -> TestResult {
+    let mut ca_path = certs_dir();
+    ca_path.push("server_rootCA.pem");
+    let mut client_key_path = certs_dir();
+    client_key_path.push("client.key");
+
+    let server = MockServer::new()?;
+    let lsb = server
+        .lsb_tcps()
+        .tls_roots(ca_path)?
+        .tls_client_key(client_key_path)?;
+    let result = lsb.build();
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigError);
+    assert!(
+        err.msg()
+            .contains("tls_client_key requires tls_client_cert")
+    );
+    Ok(())
+}
+
+#[test]
+fn test_tls_client_cert_invalid_path() {
+    let res = Sender::from_conf(
+        "tcps::addr=localhost:9009;tls_client_cert=/nonexistent/path/cert.pem;tls_client_key=/nonexistent/path/key.pem;",
+    );
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigError);
+    assert!(err.msg().contains("Could not open client certificate file"));
+}
+
+#[test]
+fn test_tls_client_key_invalid_path() {
+    let mut client_cert_path = certs_dir();
+    client_cert_path.push("client.crt");
+
+    let res = Sender::from_conf(format!(
+        "tcps::addr=localhost:9009;tls_client_cert={};tls_client_key=/nonexistent/path/key.pem;",
+        client_cert_path.display()
+    ));
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigError);
+    assert!(err.msg().contains("Could not open client private key file"));
+}
+
+#[cfg(feature = "sync-sender-tcp")]
+#[test]
+fn test_tls_pem_with_invalid_certs_returns_error() -> TestResult {
+    // Create a temp file with invalid PEM content
+    let tmp = tempfile::NamedTempFile::new()?;
+    std::io::Write::write_all(&mut tmp.as_file(), b"this is not a valid certificate\n")?;
+
+    let server = MockServer::new()?;
+    let result = server.lsb_tcps().tls_roots(tmp.path())?.build();
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    // Should fail because no valid certs were parsed from the PEM file
+    assert!(
+        err.code() == ErrorCode::TlsError,
+        "Expected TlsError, got {:?}: {}",
+        err.code(),
+        err.msg()
+    );
+    Ok(())
+}

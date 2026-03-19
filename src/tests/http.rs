@@ -887,3 +887,75 @@ fn test_buffer_protocol_version1_not_support_array() -> TestResult {
     );
     Ok(())
 }
+
+// ─── HTTPS mTLS Tests ───────────────────────────────────────────────────────
+
+#[test]
+fn test_https_mtls_valid_client_cert() -> TestResult {
+    let mut ca_path = certs_dir();
+    ca_path.push("server_rootCA.pem");
+    let mut client_cert_path = certs_dir();
+    client_cert_path.push("client.crt");
+    let mut client_key_path = certs_dir();
+    client_key_path.push("client.key");
+
+    let mut server = MockServer::new()?;
+    let lsb = server
+        .lsb_https()
+        .protocol_version(ProtocolVersion::V1)?
+        .tls_roots(ca_path)?
+        .tls_client_cert(client_cert_path)?
+        .tls_client_key(client_key_path)?;
+
+    // HTTP build() is lazy — connection happens on first flush().
+    // Server thread must accept mTLS, handle the POST /write request.
+    let server_thread = std::thread::spawn(move || -> io::Result<MockServer> {
+        server.accept_mtls_sync()?;
+
+        let req = server.recv_http_q()?;
+        assert_eq!(req.method(), "POST");
+        assert_eq!(req.path(), "/write?precision=n");
+        server.send_http_response_q(HttpResponse::empty())?;
+
+        Ok(server)
+    });
+
+    let mut sender = lsb.build()?;
+    let mut buffer = sender.new_buffer();
+    buffer
+        .table("test")?
+        .symbol("t1", "v1")?
+        .column_f64("f1", 0.5)?
+        .at(TimestampNanos::now())?;
+
+    sender.flush(&mut buffer)?;
+    _ = server_thread.join().unwrap()?;
+
+    Ok(())
+}
+
+#[test]
+fn test_https_mtls_config_string_roundtrip() -> TestResult {
+    // Verify that mTLS parameters are correctly parsed from a config string
+    // and that the builder accepts them without error (no server needed).
+    let mut ca_path = certs_dir();
+    ca_path.push("server_rootCA.pem");
+    let mut client_cert_path = certs_dir();
+    client_cert_path.push("client.crt");
+    let mut client_key_path = certs_dir();
+    client_key_path.push("client.key");
+
+    let conf = format!(
+        "https::addr=localhost:9000;tls_roots={};tls_client_cert={};tls_client_key={};protocol_version=1;",
+        ca_path.display(),
+        client_cert_path.display(),
+        client_key_path.display(),
+    );
+
+    // from_conf should succeed — all mTLS params are valid
+    let builder = SenderBuilder::from_conf(&conf)?;
+    // build() will fail because no server is running, but from_conf proves
+    // the config string parsing works
+    drop(builder);
+    Ok(())
+}

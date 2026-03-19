@@ -103,7 +103,15 @@ fn add_os_roots(root_store: &mut RootCertStore) -> crate::Result<()> {
     Ok(())
 }
 
-/// Client certificate and private key for mTLS authentication
+/// Client certificate and private key for mutual TLS (mTLS) authentication.
+///
+/// Used when the QuestDB server requires client certificate verification.
+/// Both the certificate chain and private key are loaded from PEM files
+/// via [`ClientAuth::from_pem_files`].
+///
+/// The certificate chain should contain the client's leaf certificate
+/// and optionally any intermediate certificates. The private key must
+/// correspond to the leaf certificate.
 #[derive(Debug)]
 pub(crate) struct ClientAuth {
     pub certs: Vec<CertificateDer<'static>>,
@@ -276,7 +284,12 @@ impl TlsSettings {
     }
 }
 
-/// Configure TLS with optional client authentication (mTLS)
+/// Configure a rustls [`ClientConfig`](rustls::ClientConfig) with the given
+/// root certificate settings and optional client authentication for mTLS.
+///
+/// When `client_auth` is `Some`, the client will present its certificate
+/// during the TLS handshake, enabling mutual TLS authentication.
+/// When `None`, standard one-way TLS is used.
 pub(crate) fn configure_tls(
     tls: TlsSettings,
     client_auth: Option<ClientAuth>,
@@ -300,7 +313,14 @@ pub(crate) fn configure_tls(
         }
 
         TlsSettings::PemFile(der_certs) => {
-            root_store.add_parsable_certificates(der_certs);
+            let (valid_count, invalid_count) = root_store.add_parsable_certificates(der_certs);
+            if valid_count == 0 {
+                return Err(fmt!(
+                    TlsError,
+                    "No valid certificates found in PEM file ({} found but were invalid)",
+                    invalid_count
+                ));
+            }
         }
 
         #[cfg(feature = "insecure-skip-verify")]

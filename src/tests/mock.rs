@@ -28,7 +28,8 @@ use core::time::Duration;
 use mio::event::Event;
 use mio::net::TcpStream;
 use mio::{Events, Interest, Poll, Token};
-use rustls::{ServerConfig, Stream, server::ServerConnection};
+use rustls::server::WebPkiClientVerifier;
+use rustls::{RootCertStore, ServerConfig, Stream, server::ServerConnection};
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use socket2::{Domain, Protocol as SockProtocol, Socket, Type};
@@ -69,7 +70,7 @@ pub fn certs_dir() -> std::path::PathBuf {
     certs_dir
 }
 
-fn tls_config() -> Arc<ServerConfig> {
+fn server_certs_and_key() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
     let certs_dir = certs_dir();
     let cert_file = File::open(certs_dir.join("server.crt")).expect("cannot open certificate file");
     let private_key_file =
@@ -79,8 +80,40 @@ fn tls_config() -> Arc<ServerConfig> {
         .expect("cannot read certificate file");
     let private_key =
         PrivateKeyDer::from_pem_reader(private_key_file).expect("cannot get private key from file");
+    (certs, private_key)
+}
+
+fn tls_config() -> Arc<ServerConfig> {
+    let (certs, private_key) = server_certs_and_key();
     let config = ServerConfig::builder()
         .with_no_client_auth()
+        .with_single_cert(certs, private_key)
+        .unwrap();
+    Arc::new(config)
+}
+
+/// TLS config that requires client certificate authentication (mTLS).
+/// Uses the client_rootCA.pem as the trusted CA for verifying client certs.
+pub fn tls_config_mtls() -> Arc<ServerConfig> {
+    let certs_dir = certs_dir();
+    let (certs, private_key) = server_certs_and_key();
+
+    let client_ca_file =
+        File::open(certs_dir.join("client_rootCA.pem")).expect("cannot open client CA file");
+    let client_ca_certs: Vec<CertificateDer<'static>> =
+        CertificateDer::pem_reader_iter(client_ca_file)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("cannot read client CA file");
+
+    let mut client_root_store = RootCertStore::empty();
+    client_root_store.add_parsable_certificates(client_ca_certs);
+
+    let client_verifier = WebPkiClientVerifier::builder(Arc::new(client_root_store))
+        .build()
+        .expect("cannot build client cert verifier");
+
+    let config = ServerConfig::builder()
+        .with_client_cert_verifier(client_verifier)
         .with_single_cert(certs, private_key)
         .unwrap();
     Arc::new(config)
@@ -235,10 +268,10 @@ impl MockServer {
         Ok(())
     }
 
-    pub fn accept_tls_sync(&mut self) -> io::Result<()> {
+    fn accept_tls_with_config(&mut self, config: Arc<ServerConfig>) -> io::Result<()> {
         self.accept()?;
         let client = self.client.as_mut().unwrap();
-        let mut tls_conn = ServerConnection::new(tls_config()).unwrap();
+        let mut tls_conn = ServerConnection::new(config).unwrap();
         let mut stream = Stream::new(&mut tls_conn, client);
         let begin = Instant::now();
         while stream.conn.is_handshaking() {
@@ -263,10 +296,28 @@ impl MockServer {
         Ok(())
     }
 
+    pub fn accept_tls_sync(&mut self) -> io::Result<()> {
+        self.accept_tls_with_config(tls_config())
+    }
+
+    /// Accept a TLS connection that requires client certificate (mTLS).
+    pub fn accept_mtls_sync(&mut self) -> io::Result<()> {
+        self.accept_tls_with_config(tls_config_mtls())
+    }
+
     #[cfg(feature = "sync-sender-tcp")]
     pub fn accept_tls(mut self) -> std::thread::JoinHandle<io::Result<Self>> {
         std::thread::spawn(|| {
             self.accept_tls_sync()?;
+            Ok(self)
+        })
+    }
+
+    /// Accept mTLS connection in a background thread (for TCP tests).
+    #[cfg(feature = "sync-sender-tcp")]
+    pub fn accept_mtls(mut self) -> std::thread::JoinHandle<io::Result<Self>> {
+        std::thread::spawn(|| {
+            self.accept_mtls_sync()?;
             Ok(self)
         })
     }

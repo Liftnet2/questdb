@@ -137,6 +137,21 @@ required-features = [
     "bigdecimal",
 ]
 
+[[example]]
+name = "https_remote"
+path = "examples/https_remote.rs"
+required-features = ["sync-sender-http"]
+
+[[example]]
+name = "https_local"
+path = "examples/https_local.rs"
+required-features = ["sync-sender-http"]
+
+[[example]]
+name = "https_mtls"
+path = "examples/https_mtls.rs"
+required-features = ["sync-sender-http"]
+
 [dependencies.aws-lc-rs]
 version = "1.13"
 optional = true
