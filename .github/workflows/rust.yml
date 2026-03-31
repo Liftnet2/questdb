@@ -1,8 +1,39 @@
 on: [push, pull_request]
 name: Rust [questdb-rs-mtls]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_BUILD_JOBS: "8"
+  RUST_TEST_THREADS: "8"
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
 jobs:
   ci:
-    uses: Liftnet2/gh-actions/.github/workflows/rust-ci.yml@v1
-    with:
-      clippy-args: '-W clippy::all -D warnings'
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-03-30
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Build
+        run: cargo build
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all --tests -- -W clippy::all -D warnings
+
+      - name: Run tests
+        run: cargo test
