@@ -12,7 +12,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  ci:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-03-30
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all --tests -- -W clippy::all -D warnings
+
+  unit-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -28,12 +48,6 @@ jobs:
 
       - name: Build
         run: cargo build
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --all --tests -- -W clippy::all -D warnings
 
       - name: Run tests
         run: cargo test
